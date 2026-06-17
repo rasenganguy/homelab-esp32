@@ -1,0 +1,88 @@
+{
+  "name": "ESP32 Air Quality Monitor",
+  "__description": "Monitors CO2, PM2.5, VOC and sends Telegram alerts + logs to InfluxDB",
+  "__note": "Import into n8n — configure MQTT and Telegram credentials",
+  "nodes": [
+    {
+      "id": "mqtt-aq",
+      "name": "MQTT: Air Quality",
+      "type": "n8n-nodes-base.mqttTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "topics": "homelab/air_quality/#"
+      }
+    },
+    {
+      "id": "code-aq-parse",
+      "name": "Parse AQ Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "parameters": {
+        "jsCode": "const topic = $input.first().json.topic;\nconst payload = $input.first().json.message;\n\n// homelab/air_quality/{location}/alerts/{type}\nconst parts = topic.split('/');\nconst location = parts[2];\nconst isAlert = parts[3] === 'alerts';\nconst alertType = parts[4];\nconst value = parseFloat(payload) || payload;\n\nconst alertMessages = {\n  co2: {\n    warning: `⚠️ CO2 elevated: ${value} ppm — consider ventilation`,\n    critical: `🚨 CO2 critical: ${value} ppm — open windows NOW`,\n    normal: null\n  },\n  pm25: {\n    warning: `⚠️ PM2.5: ${value} µg/m³ — air quality degraded`,\n    normal: null\n  }\n};\n\nlet message = null;\nif (isAlert && alertMessages[alertType]) {\n  message = alertMessages[alertType][payload];\n}\n\nreturn [{\n  json: {\n    location,\n    isAlert,\n    alertType,\n    alertLevel: payload,\n    value,\n    message,\n    timestamp: new Date().toISOString(),\n    shouldNotify: message !== null\n  }\n}];"
+      }
+    },
+    {
+      "id": "filter-alerts",
+      "name": "Filter Alerts Only",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.shouldNotify }}",
+              "value2": true
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "telegram-aq",
+      "name": "Telegram: AQ Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 200],
+      "parameters": {
+        "chatId": "-4985168305",
+        "text": "={{ $json.message }}\n📍 Location: {{ $json.location }}\n🕐 {{ new Date($json.timestamp).toLocaleTimeString() }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      }
+    },
+    {
+      "id": "influxdb-write",
+      "name": "InfluxDB: Write Metrics",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "http://192.168.10.83:8086/write?db=esp32_sensors",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "bodyContentType": "raw",
+        "rawBody": "=air_quality,location={{ $json.location }},type={{ $json.alertType }} level=\"{{ $json.alertLevel }}\",value={{ isNaN(parseFloat($json.value)) ? '0' : $json.value }} {{ Date.now() }}000000"
+      }
+    }
+  ],
+  "connections": {
+    "MQTT: Air Quality": {
+      "main": [[{ "node": "Parse AQ Data", "type": "main", "index": 0 }]]
+    },
+    "Parse AQ Data": {
+      "main": [[{ "node": "Filter Alerts Only", "type": "main", "index": 0 }]]
+    },
+    "Filter Alerts Only": {
+      "main": [
+        [{ "node": "Telegram: AQ Alert", "type": "main", "index": 0 }],
+        [{ "node": "InfluxDB: Write Metrics", "type": "main", "index": 0 }]
+      ]
+    }
+  }
+}
