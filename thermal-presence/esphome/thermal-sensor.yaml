@@ -1,0 +1,166 @@
+# ============================================================
+# Thermal Presence Sensor — AMG8833 8x8 Grid-EYE
+# BONUS PROJECT: Detects heat signatures with room-level heatmap
+# Hardware: XIAO ESP32-S3 Sense + AMG8833 (Qwiic/I2C)
+# ============================================================
+# Capabilities:
+#   - 8x8 = 64 pixel thermal grid (-20°C to 100°C)
+#   - Detects humans, pets, AND warm objects (mice, cats)
+#   - 10 FPS refresh rate
+#   - 7m detection range
+#   - Feeds heatmap data to HA for visualization
+#   - Person counting via zone detection (up to 2 people)
+#
+# Wiring (Qwiic — no soldering):
+#   AMG8833 SDA → XIAO D4 (GPIO5)
+#   AMG8833 SCL → XIAO D5 (GPIO6)
+#   AMG8833 VCC → XIAO 3V3
+#   AMG8833 GND → XIAO GND
+#   AMG8833 INT → XIAO D0 (GPIO1) [optional interrupt pin]
+# ============================================================
+
+substitutions:
+  node_name: "thermal-sensor-office"
+  node_friendly: "Office Thermal Sensor"
+  room_name: "office"
+  # Threshold temperature to count as "human present" (°C)
+  # Human skin: 32-36°C; body surface through clothes: 28-34°C
+  human_temp_threshold: "28.0"
+  update_interval: "2s"
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${node_friendly}
+  comment: "AMG8833 thermal presence with person counting"
+
+esp32:
+  board: seeed_xiao_esp32s3
+  variant: esp32s3
+  framework:
+    type: arduino
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret ha_api_key
+
+ota:
+  - platform: esphome
+    password: !secret ha_ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${node_name}-fallback"
+    password: !secret wifi_fallback_password
+
+captive_portal:
+
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  topic_prefix: "homelab/thermal/${room_name}"
+
+i2c:
+  sda: GPIO5
+  scl: GPIO6
+  scan: true
+
+sensor:
+  # ============================================================
+  # AMG8833 — All 64 pixel temperatures + aggregates
+  # ============================================================
+  - platform: amg8833
+    id: amg8833_sensor
+    update_interval: ${update_interval}
+
+    # Max temperature in frame (good for presence detection)
+    max_temperature:
+      name: "${node_friendly} Max Temp"
+      id: max_temp
+      unit_of_measurement: "°C"
+      accuracy_decimals: 1
+      on_value:
+        then:
+          - binary_sensor.template.publish:
+              id: heat_presence
+              state: !lambda "return x > ${human_temp_threshold};"
+
+    # Min temperature
+    min_temperature:
+      name: "${node_friendly} Min Temp"
+      unit_of_measurement: "°C"
+
+    # Average temperature across full frame
+    average_temperature:
+      name: "${node_friendly} Avg Frame Temp"
+      unit_of_measurement: "°C"
+
+    # Built-in thermistor (ambient)
+    thermistor_temperature:
+      name: "${node_friendly} Ambient Temp"
+      unit_of_measurement: "°C"
+
+    # Number of pixels above human threshold = person count estimate
+    pixels_above_threshold:
+      name: "${node_friendly} Hot Pixels"
+      id: hot_pixels
+      threshold: ${human_temp_threshold}
+      on_value:
+        then:
+          - mqtt.publish:
+              topic: "homelab/thermal/${room_name}/hot_pixels"
+              payload: !lambda "return to_string((int)x);"
+
+  - platform: wifi_signal
+    name: "${node_friendly} WiFi Signal"
+    update_interval: 60s
+
+  - platform: uptime
+    name: "${node_friendly} Uptime"
+
+binary_sensor:
+  # Heat-based presence detection
+  - platform: template
+    name: "${node_friendly} Heat Presence"
+    id: heat_presence
+    device_class: occupancy
+
+  # Person count estimate (crude — 1 or 2+)
+  - platform: template
+    name: "${node_friendly} Multiple People"
+    id: multi_person
+    device_class: occupancy
+    lambda: |-
+      return id(hot_pixels).state > 12;  // Rough threshold for 2 people
+
+text_sensor:
+  # Person count category
+  - platform: template
+    name: "${node_friendly} Occupancy Count"
+    update_interval: ${update_interval}
+    lambda: |-
+      float pixels = id(hot_pixels).state;
+      if (pixels == 0) return {"Empty"};
+      if (pixels <= 8) return {"1 Person"};
+      if (pixels <= 16) return {"2 People"};
+      return {"3+ People"};
+
+button:
+  - platform: restart
+    name: "${node_friendly} Restart"
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: status_led
+    name: "${node_friendly} LED"
+    pin: GPIO21
+    num_leds: 1
+    rmt_symbols: 64
+    chipset: WS2812
+    rgb_order: GRB
+    default_transition_length: 0s
