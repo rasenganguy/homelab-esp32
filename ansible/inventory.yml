@@ -1,0 +1,54 @@
+---
+# ============================================================
+# Ansible Inventory — ESP32 Homelab Nodes
+# ============================================================
+
+all:
+  children:
+    esphome_host:
+      hosts:
+        # Run ESPHome dashboard on CT109 (Grafana/InfluxDB LXC)
+        # or dedicate a new LXC for it
+        192.168.10.83:
+          ansible_user: root
+          ansible_python_interpreter: /usr/bin/python3
+
+    # ESP32 nodes are managed via ESPHome dashboard, not Ansible directly.
+    # These entries are for inventory/documentation purposes.
+    esp32_nodes:
+      hosts:
+        presence-office:
+          ansible_host: presence-office.iot.local
+          room: office
+          hardware: "XIAO ESP32-S3 + LD2410C + AM312"
+          vlan: 5
+
+        presence-livingroom:
+          ansible_host: presence-livingroom.iot.local
+          room: livingroom
+          hardware: "XIAO ESP32-S3 + LD2410C + AM312"
+          vlan: 5
+
+        presence-bedroom:
+          ansible_host: presence-bedroom.iot.local
+          room: bedroom
+          hardware: "XIAO ESP32-S3 + LD2410C + AM312"
+          vlan: 5
+
+        air-quality-main:
+          ansible_host: air-quality-main.iot.local
+          room: living_room
+          hardware: "XIAO ESP32-S3 + SCD40 + SEN55 + ENS160 + BMP280"
+          vlan: 5
+
+        thermal-sensor-office:
+          ansible_host: thermal-sensor-office.iot.local
+          room: office
+          hardware: "XIAO ESP32-S3 + AMG8833"
+          vlan: 5
+
+        c6-env-monitor:
+          ansible_host: c6-env-monitor.iot.local
+          room: hallway
+          hardware: "XIAO ESP32-C6 + BME280"
+          vlan: 5
