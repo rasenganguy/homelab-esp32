@@ -1,0 +1,151 @@
+---
+# ============================================================
+# Ansible Playbook: Deploy ESPHome for ESP32 Homelab Nodes
+# Run from CT101 (Semaphore/Ansible at 192.168.10.228)
+# ============================================================
+# Usage:
+#   ansible-playbook deploy-esphome.yml -i inventory.yml
+#   ansible-playbook deploy-esphome.yml -i inventory.yml --tags flash
+# ============================================================
+
+- name: Deploy ESPHome environment
+  hosts: esphome_host
+  become: true
+  gather_facts: true
+
+  vars:
+    esphome_dir: /opt/esphome
+    esphome_config_dir: /opt/esphome/config
+    esphome_version: "2024.6.0"
+    python_version: "3.11"
+
+  tasks:
+    - name: Install system dependencies
+      apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+          - git
+          - curl
+          - esptool
+        state: present
+        update_cache: true
+
+    - name: Create ESPHome directory
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        mode: '0755'
+      loop:
+        - "{{ esphome_dir }}"
+        - "{{ esphome_config_dir }}"
+
+    - name: Create Python venv for ESPHome
+      command: python3 -m venv {{ esphome_dir }}/venv
+      args:
+        creates: "{{ esphome_dir }}/venv/bin/activate"
+
+    - name: Install ESPHome in venv
+      pip:
+        name: "esphome=={{ esphome_version }}"
+        virtualenv: "{{ esphome_dir }}/venv"
+        state: present
+
+    - name: Copy secrets.yaml
+      copy:
+        src: ../secrets.yaml
+        dest: "{{ esphome_config_dir }}/secrets.yaml"
+        owner: "{{ ansible_user }}"
+        mode: '0600'
+      tags: secrets
+
+    - name: Copy all ESPHome configs
+      copy:
+        src: "{{ item }}"
+        dest: "{{ esphome_config_dir }}/"
+        owner: "{{ ansible_user }}"
+        mode: '0644'
+      with_fileglob:
+        - "../presence-sensor/esphome/*.yaml"
+        - "../air-quality-monitor/esphome/*.yaml"
+        - "../thermal-presence/esphome/*.yaml"
+        - "../esp32-c6-gateway/esphome/*.yaml"
+      tags: configs
+
+    - name: Create ESPHome systemd service
+      template:
+        src: templates/esphome.service.j2
+        dest: /etc/systemd/system/esphome.service
+        mode: '0644'
+      notify: Reload systemd
+
+    - name: Enable and start ESPHome dashboard
+      systemd:
+        name: esphome
+        enabled: true
+        state: started
+      tags: service
+
+  handlers:
+    - name: Reload systemd
+      systemd:
+        daemon_reload: true
+
+# ============================================================
+# Flash a specific node (requires USB connection to host)
+# ============================================================
+- name: Flash ESP32 node
+  hosts: esphome_host
+  become: true
+  tags: ["flash", "never"]
+
+  vars:
+    esphome_dir: /opt/esphome
+    node_config: "presence-office"  # Override with -e node_config=xxx
+
+  tasks:
+    - name: Compile and flash {{ node_config }}
+      command: >
+        {{ esphome_dir }}/venv/bin/esphome run
+        {{ esphome_dir }}/config/{{ node_config }}.yaml
+        --no-logs
+      register: flash_result
+
+    - name: Show flash result
+      debug:
+        var: flash_result.stdout_lines
+
+# ============================================================
+# OTA update all online nodes
+# ============================================================
+- name: OTA update all ESP32 nodes
+  hosts: esphome_host
+  become: true
+  tags: ["ota", "never"]
+
+  vars:
+    esphome_dir: /opt/esphome
+    node_configs:
+      - presence-office
+      - presence-livingroom
+      - presence-bedroom
+      - air-quality-main
+      - thermal-sensor-office
+      - c6-env-monitor
+
+  tasks:
+    - name: OTA compile and upload {{ item }}
+      command: >
+        {{ esphome_dir }}/venv/bin/esphome run
+        {{ esphome_dir }}/config/{{ item }}.yaml
+        --no-logs
+      loop: "{{ node_configs }}"
+      ignore_errors: true
+      register: ota_results
+
+    - name: Show OTA results
+      debug:
+        msg: "{{ item.item }}: {{ 'SUCCESS' if item.rc == 0 else 'FAILED' }}"
+      loop: "{{ ota_results.results }}"
