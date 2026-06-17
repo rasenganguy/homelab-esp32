@@ -1,51 +1,68 @@
 # ============================================================
-# Home Assistant Automations — Presence Sensor Suite
-# Import via: Settings → Automations → Import Blueprint
-# Or paste directly into automations.yaml
+#  Home Assistant Automations — Presence & Air Quality
 # ============================================================
-# Assumptions:
-#   - Sensors named like: binary_sensor.office_presence_occupied_combined
-#   - Lights named like: light.office_lights
-#   - MQTT broker running on 192.168.50.127
-#   - Telegram notification service configured
+#  HOW TO IMPORT THESE INTO HOME ASSISTANT:
+#
+#  Option A (Recommended — UI):
+#    1. HA → Settings → Automations & Scenes
+#    2. Click the ⋮ menu (top right) → "Edit in YAML"
+#    3. Paste what you need from this file
+#
+#  Option B (configuration.yaml package):
+#    Add to your configuration.yaml:
+#      homeassistant:
+#        packages:
+#          esp32: !include_dir_named packages/esp32/
+#    Then save this file to /config/packages/esp32/presence-automations.yaml
+#
+#  IMPORTANT — Entity ID names:
+#  The entity IDs below are what ESPHome generates automatically.
+#  They follow the pattern: binary_sensor.<node_friendly_name_lowercase>_<sensor_name>
+#  For example, node_friendly "Office Presence" → binary_sensor.office_presence_occupied_combined
+#  If your IDs look different, check HA → Developer Tools → States and search for your device.
 # ============================================================
 
-# ------------------------------------------------------------
-# 1. AUTO LIGHTS — Turn on when room occupied, off when empty
-# ------------------------------------------------------------
-- id: "presence_auto_lights_office"
-  alias: "Presence: Office Lights Auto"
-  description: "Automatically control office lights based on presence"
+# ============================================================
+# 1. OFFICE LIGHTS — Auto on when occupied, off when empty
+# ============================================================
+- id: "esp32_presence_office_lights"
+  alias: "ESP32 Presence: Office Lights"
+  description: "Turn office lights on when someone enters, off after they leave"
+  mode: single
+
   trigger:
     - platform: state
       entity_id: binary_sensor.office_presence_occupied_combined
       to: "on"
-      id: "room_occupied"
+      id: "entered"
     - platform: state
       entity_id: binary_sensor.office_presence_occupied_combined
       to: "off"
       for:
-        minutes: 2
-      id: "room_empty"
+        minutes: 2   # Wait 2 min after empty before turning off (avoids flicker)
+      id: "left"
+
   condition:
+    # Only during daytime — don't turn on lights at 3am
     - condition: time
       after: "07:00:00"
       before: "23:00:00"
+
   action:
     - choose:
         - conditions:
             - condition: trigger
-              id: "room_occupied"
+              id: "entered"
           sequence:
             - service: light.turn_on
               target:
-                entity_id: light.office_lights
+                entity_id: light.office_lights   # ← Change to your actual light entity
               data:
                 brightness_pct: 80
                 transition: 2
         - conditions:
             - condition: trigger
-              id: "room_empty"
+              id: "left"
           sequence:
             - service: light.turn_off
               target:
@@ -53,90 +70,25 @@
               data:
                 transition: 5
 
-# ------------------------------------------------------------
-# 2. WHOLE-HOME OCCUPANCY — Track if anyone is home
-# ------------------------------------------------------------
-- id: "presence_whole_home_tracker"
-  alias: "Presence: Whole Home Occupancy State"
-  description: "Sets input_boolean.home_occupied based on any room being occupied"
-  trigger:
-    - platform: state
-      entity_id:
-        - binary_sensor.office_presence_occupied_combined
-        - binary_sensor.living_room_presence_occupied_combined
-        - binary_sensor.bedroom_presence_occupied_combined
-        - binary_sensor.kitchen_mmwave_presence
-  action:
-    - service: input_boolean.turn_on
-      target:
-        entity_id: input_boolean.home_occupied
-      enabled: >
-        {{ states('binary_sensor.office_presence_occupied_combined') == 'on' or
-           states('binary_sensor.living_room_presence_occupied_combined') == 'on' or
-           states('binary_sensor.bedroom_presence_occupied_combined') == 'on' or
-           states('binary_sensor.kitchen_mmwave_presence') == 'on' }}
-    - service: input_boolean.turn_off
-      target:
-        entity_id: input_boolean.home_occupied
-      enabled: >
-        {{ states('binary_sensor.office_presence_occupied_combined') == 'off' and
-           states('binary_sensor.living_room_presence_occupied_combined') == 'off' and
-           states('binary_sensor.bedroom_presence_occupied_combined') == 'off' and
-           states('binary_sensor.kitchen_mmwave_presence') == 'off' }}
+# ============================================================
+# 2. SLEEP MODE — Detect when you go to bed
+# ============================================================
+- id: "esp32_sleep_mode_activate"
+  alias: "ESP32 Presence: Sleep Mode On"
+  description: "Activate sleep mode when still presence detected in bedroom at night"
 
-# ------------------------------------------------------------
-# 3. HVAC OPTIMIZATION — Adjust thermostat based on presence
-# ------------------------------------------------------------
-- id: "presence_hvac_away_mode"
-  alias: "Presence: HVAC Away Mode"
-  description: "Set HVAC to away mode when no presence detected for 30 min"
-  trigger:
-    - platform: state
-      entity_id: input_boolean.home_occupied
-      to: "off"
-      for:
-        minutes: 30
-  condition: []
-  action:
-    - service: climate.set_preset_mode
-      target:
-        entity_id: climate.main_thermostat
-      data:
-        preset_mode: "away"
-    - service: notify.telegram_homelab
-      data:
-        message: "🏠 No presence detected for 30 min — HVAC set to away mode"
-
-- id: "presence_hvac_home_mode"
-  alias: "Presence: HVAC Home Mode"
-  description: "Restore HVAC home mode when presence detected"
-  trigger:
-    - platform: state
-      entity_id: input_boolean.home_occupied
-      to: "on"
-  action:
-    - service: climate.set_preset_mode
-      target:
-        entity_id: climate.main_thermostat
-      data:
-        preset_mode: "home"
-
-# ------------------------------------------------------------
-# 4. SLEEP DETECTION — Bedroom still presence at night
-# ------------------------------------------------------------
-- id: "presence_sleep_mode"
-  alias: "Presence: Sleep Mode Activation"
-  description: "Activate sleep mode when bedroom still presence detected at night"
   trigger:
     - platform: state
       entity_id: binary_sensor.bedroom_presence_still_presence
       to: "on"
       for:
-        minutes: 10
+        minutes: 10   # Has been still for 10 minutes
+
   condition:
     - condition: time
       after: "21:00:00"
       before: "08:00:00"
+
   action:
     - service: input_boolean.turn_on
       target:
@@ -147,69 +99,156 @@
       data:
         transition: 30
 
-# ------------------------------------------------------------
-# 5. AIR QUALITY ALERTS — Ventilation control
-# ------------------------------------------------------------
-- id: "air_quality_co2_alert"
-  alias: "Air Quality: CO2 High Alert"
-  description: "Alert and trigger ventilation when CO2 is high"
+- id: "esp32_sleep_mode_deactivate"
+  alias: "ESP32 Presence: Sleep Mode Off"
+  description: "Deactivate sleep mode when movement detected in bedroom in morning"
+
+  trigger:
+    - platform: state
+      entity_id: binary_sensor.bedroom_presence_motion
+      to: "on"
+
+  condition:
+    - condition: state
+      entity_id: input_boolean.sleep_mode
+      state: "on"
+    - condition: time
+      after: "05:00:00"
+      before: "12:00:00"
+
+  action:
+    - service: input_boolean.turn_off
+      target:
+        entity_id: input_boolean.sleep_mode
+
+# ============================================================
+# 3. HVAC AWAY MODE — Save energy when no one is home
+# ============================================================
+- id: "esp32_hvac_away"
+  alias: "ESP32 Presence: HVAC Away Mode"
+  description: "Set HVAC to away/eco when no room has detected presence for 30 min"
+
+  trigger:
+    - platform: state
+      entity_id: input_boolean.home_occupied
+      to: "off"
+      for:
+        minutes: 30
+
+  action:
+    - service: climate.set_preset_mode
+      target:
+        entity_id: climate.main_thermostat   # ← Change to your thermostat entity
+      data:
+        preset_mode: "away"
+    - service: notify.telegram_homelab
+      data:
+        message: "🏠 No presence for 30 min — HVAC set to away mode"
+
+- id: "esp32_hvac_home"
+  alias: "ESP32 Presence: HVAC Home Mode"
+  description: "Restore HVAC when someone comes home"
+
+  trigger:
+    - platform: state
+      entity_id: input_boolean.home_occupied
+      to: "on"
+
+  action:
+    - service: climate.set_preset_mode
+      target:
+        entity_id: climate.main_thermostat
+      data:
+        preset_mode: "home"
+
+# ============================================================
+# 4. CO2 ALERT — Notify when air quality drops
+# ============================================================
+- id: "esp32_co2_high_alert"
+  alias: "ESP32 Air Quality: CO2 High Alert"
+  description: "Send Telegram alert when CO2 gets too high"
+
   trigger:
     - platform: numeric_state
       entity_id: sensor.air_quality_monitor_co2
       above: 1000
       for:
         minutes: 5
-  condition: []
+
   action:
     - service: notify.telegram_homelab
       data:
         message: >
           🌬️ CO2 elevated: {{ states('sensor.air_quality_monitor_co2') }} ppm
-          in {{ states('sensor.air_quality_monitor_air_quality_status') }} air quality.
-          Consider opening windows.
-    # Trigger Aprilaire ventilation if available
+          Consider opening a window or turning on ventilation.
+
+- id: "esp32_co2_critical"
+  alias: "ESP32 Air Quality: CO2 Critical"
+  description: "Urgent alert when CO2 is dangerously high"
+
+  trigger:
+    - platform: numeric_state
+      entity_id: sensor.air_quality_monitor_co2
+      above: 2000
+      for:
+        minutes: 2
+
+  action:
+    - service: notify.telegram_homelab
+      data:
+        message: >
+          🚨 CO2 CRITICAL: {{ states('sensor.air_quality_monitor_co2') }} ppm!
+          Open windows immediately. This causes headaches and poor sleep.
+    # Trigger Aprilaire ventilation if you have it wired up
     - service: fan.turn_on
       target:
         entity_id: fan.aprilaire_ventilation
       continue_on_error: true
 
-- id: "air_quality_pm25_alert"
-  alias: "Air Quality: PM2.5 High Alert"
+# ============================================================
+# 5. PM2.5 ALERT — Particulate matter warning
+# ============================================================
+- id: "esp32_pm25_alert"
+  alias: "ESP32 Air Quality: PM2.5 Alert"
+
   trigger:
     - platform: numeric_state
       entity_id: sensor.air_quality_monitor_pm2_5
       above: 25
       for:
         minutes: 5
+
   action:
     - service: notify.telegram_homelab
       data:
         message: >
-          🫧 PM2.5 elevated: {{ states('sensor.air_quality_monitor_pm2_5') }} µg/m³.
-          Consider running air purifier.
+          🫧 PM2.5 elevated: {{ states('sensor.air_quality_monitor_pm2_5') }} µg/m³
+          Consider running an air purifier.
 
-# ------------------------------------------------------------
-# 6. TELEGRAM DAILY PRESENCE SUMMARY
-# ------------------------------------------------------------
-- id: "presence_daily_summary"
-  alias: "Presence: Daily Summary via Telegram"
-  description: "Send daily presence and air quality summary at 8 PM"
+# ============================================================
+# 6. DAILY SUMMARY — Morning report via Telegram
+# ============================================================
+- id: "esp32_daily_summary"
+  alias: "ESP32: Daily Home Summary"
+  description: "Sends a morning summary of air quality and presence to Telegram"
+
   trigger:
     - platform: time
-      at: "20:00:00"
+      at: "08:00:00"
+
   action:
     - service: notify.telegram_homelab
       data:
         message: >
-          📊 Daily Home Summary:
+          🌅 Good morning! Home Summary:
 
-          🏠 Home occupied: {{ states('input_boolean.home_occupied') }}
-          🌡️ Office CO2: {{ states('sensor.air_quality_monitor_co2') }} ppm
+          🏠 Home occupied: {{ states('input_boolean.home_occupied') | title }}
+          🌡️ CO2: {{ states('sensor.air_quality_monitor_co2') }} ppm
           🫧 PM2.5: {{ states('sensor.air_quality_monitor_pm2_5') }} µg/m³
-          💧 Humidity: {{ states('sensor.air_quality_monitor_humidity_scd40') }}%
-          🌬️ Air Quality: {{ states('sensor.air_quality_monitor_air_quality_status') }}
+          💧 Humidity: {{ states('sensor.air_quality_monitor_humidity') }}%
+          🌬️ Air: {{ states('sensor.air_quality_monitor_air_quality_status') }}
 
-          Presence nodes online:
-          • Office: {{ states('binary_sensor.office_presence_occupied_combined') }}
-          • Living Room: {{ states('binary_sensor.living_room_presence_occupied_combined') }}
-          • Bedroom: {{ states('binary_sensor.bedroom_presence_occupied_combined') }}
+          📍 Rooms occupied:
+          • Office: {{ states('binary_sensor.office_presence_occupied_combined') | title }}
+          • Living Room: {{ states('binary_sensor.living_room_presence_occupied_combined') | title }}
+          • Bedroom: {{ states('binary_sensor.bedroom_presence_occupied_combined') | title }}
