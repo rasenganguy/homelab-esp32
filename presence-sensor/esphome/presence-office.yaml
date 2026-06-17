@@ -1,0 +1,19 @@
+# ============================================================
+# Office Presence Node — Instance Config
+# ============================================================
+# Flash command: esphome run presence-office.yaml
+# ============================================================
+
+substitutions:
+  node_name: "presence-office"
+  node_friendly: "Office Presence"
+  room_name: "office"
+  ld2410_max_distance: "4m"     # Office is smaller, 4m is sufficient
+  ld2410_still_threshold: "20"
+  ld2410_move_threshold: "20"
+  pir_delay_off: "15s"
+  update_interval: "5s"
+  log_level: "INFO"
+
+packages:
+  base: !include presence-node.yaml
