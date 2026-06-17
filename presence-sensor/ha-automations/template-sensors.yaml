@@ -1,12 +1,17 @@
 # ============================================================
-# Home Assistant — Template Sensors & Input Helpers
-# Add these to your configuration.yaml or split into packages
+#  Home Assistant — Template Sensors & Input Helpers
+# ============================================================
+#  Add these to your configuration.yaml or use packages.
+#
+#  These create "virtual" sensors that combine data from multiple
+#  ESP32 nodes into useful summary sensors.
 # ============================================================
 
 # ============================================================
-# INPUT BOOLEANS (Helpers)
-# Settings → Devices & Services → Helpers → Create
-# Or paste into configuration.yaml
+# INPUT BOOLEANS
+# These are on/off switches you can use in automations.
+# Create them in HA: Settings → Devices → Helpers → Create Helper → Toggle
+# Or paste this block into configuration.yaml
 # ============================================================
 input_boolean:
   home_occupied:
@@ -17,16 +22,12 @@ input_boolean:
     name: "Sleep Mode"
     icon: mdi:sleep
 
-  presence_debug_mode:
-    name: "Presence Debug Mode"
-    icon: mdi:bug
-
 # ============================================================
 # TEMPLATE SENSORS
 # ============================================================
 template:
   - sensor:
-      # Whole-home presence summary
+      # Which rooms are currently occupied?
       - name: "Home Presence Status"
         unique_id: "home_presence_status"
         state: >
@@ -43,7 +44,7 @@ template:
           {% endif %}
         icon: mdi:home-account
 
-      # Room count occupied
+      # How many rooms are currently occupied?
       - name: "Rooms Occupied Count"
         unique_id: "rooms_occupied_count"
         state: >
@@ -56,7 +57,7 @@ template:
         unit_of_measurement: "rooms"
         icon: mdi:door-open
 
-      # Overall AQI from ENS160
+      # Overall air quality label
       - name: "Home AQI Category"
         unique_id: "home_aqi_category"
         state: >
@@ -68,16 +69,31 @@ template:
           {% elif aqi >= 5 %} Unhealthy
           {% else %} Unknown
           {% endif %}
-        icon: >
-          {% set aqi = states('sensor.air_quality_monitor_aqi') | int(0) %}
-          {% if aqi <= 2 %} mdi:emoticon-happy
-          {% elif aqi == 3 %} mdi:emoticon-neutral
-          {% else %} mdi:emoticon-sad
-          {% endif %}
+
+  # Virtual binary sensor: is ANYONE home?
+  - binary_sensor:
+      - name: "Home Occupied"
+        unique_id: "home_occupied_virtual"
+        device_class: occupancy
+        state: >
+          {{ is_state('binary_sensor.office_presence_occupied_combined', 'on') or
+             is_state('binary_sensor.living_room_presence_occupied_combined', 'on') or
+             is_state('binary_sensor.bedroom_presence_occupied_combined', 'on') }}
+        # When this changes, update the input_boolean too
+        on_press:
+          then:
+            - service: input_boolean.turn_on
+              target:
+                entity_id: input_boolean.home_occupied
+        on_release:
+          then:
+            - service: input_boolean.turn_off
+              target:
+                entity_id: input_boolean.home_occupied
 
 # ============================================================
-# INFLUXDB INTEGRATION (for Grafana dashboards)
-# Add to configuration.yaml
+# INFLUXDB — Sends sensor data to Grafana (CT109)
+# Add this block to configuration.yaml
 # ============================================================
 influxdb:
   host: 192.168.10.83
@@ -89,14 +105,16 @@ influxdb:
   default_measurement: state
   include:
     entities:
+      # Air quality
       - sensor.air_quality_monitor_co2
       - sensor.air_quality_monitor_pm2_5
       - sensor.air_quality_monitor_pm10
-      - sensor.air_quality_monitor_voc_index_sen55
+      - sensor.air_quality_monitor_voc_index
       - sensor.air_quality_monitor_nox_index
-      - sensor.air_quality_monitor_humidity_scd40
-      - sensor.air_quality_monitor_temperature_scd40
+      - sensor.air_quality_monitor_humidity
+      - sensor.air_quality_monitor_temperature
       - sensor.air_quality_monitor_barometric_pressure
+      # Presence
       - sensor.office_presence_still_distance
       - sensor.office_presence_moving_distance
       - sensor.office_presence_still_energy
