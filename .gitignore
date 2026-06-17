@@ -1,0 +1,48 @@
+# ============================================================
+# .gitignore — homelab-esp32
+# ============================================================
+
+# NEVER commit real secrets
+secrets.yaml
+*.secrets.yaml
+
+# ESPHome build artifacts
+.esphome/
+esphome/.esphome/
+**/.esphome/
+
+# ESPHome generated files
+*.bin
+*.elf
+*.map
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Ansible
+*.retry
+ansible/.vault_pass
+
+# Node / n8n local
+node_modules/
+.npm/
+
+# Logs
+*.log
+logs/
