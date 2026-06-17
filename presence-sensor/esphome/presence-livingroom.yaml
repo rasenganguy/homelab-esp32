@@ -1,15 +1,16 @@
 # ============================================================
-# Living Room Presence Node — Instance Config
+#  Living Room Presence Node
 # ============================================================
-# Flash command: esphome run presence-livingroom.yaml
+#  Flash command (Windows): tools\windows\flash-windows.bat presence-livingroom
+#  Flash command (Linux):   ./tools/linux/flash.sh presence-livingroom
 # ============================================================
 
 substitutions:
   node_name: "presence-livingroom"
   node_friendly: "Living Room Presence"
   room_name: "livingroom"
-  ld2410_max_distance: "6m"     # Large room, use full range
-  ld2410_still_threshold: "15"  # More sensitive for open space
+  ld2410_max_distance: "6m"         # Larger room — use full 6m range
+  ld2410_still_threshold: "15"      # Slightly more sensitive for open space
   ld2410_move_threshold: "15"
   pir_delay_off: "10s"
   update_interval: "5s"
