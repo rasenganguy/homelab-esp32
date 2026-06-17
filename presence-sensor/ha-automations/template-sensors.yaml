@@ -1,0 +1,107 @@
+# ============================================================
+# Home Assistant — Template Sensors & Input Helpers
+# Add these to your configuration.yaml or split into packages
+# ============================================================
+
+# ============================================================
+# INPUT BOOLEANS (Helpers)
+# Settings → Devices & Services → Helpers → Create
+# Or paste into configuration.yaml
+# ============================================================
+input_boolean:
+  home_occupied:
+    name: "Home Occupied"
+    icon: mdi:home-account
+
+  sleep_mode:
+    name: "Sleep Mode"
+    icon: mdi:sleep
+
+  presence_debug_mode:
+    name: "Presence Debug Mode"
+    icon: mdi:bug
+
+# ============================================================
+# TEMPLATE SENSORS
+# ============================================================
+template:
+  - sensor:
+      # Whole-home presence summary
+      - name: "Home Presence Status"
+        unique_id: "home_presence_status"
+        state: >
+          {% set rooms = [
+            ('Office', 'binary_sensor.office_presence_occupied_combined'),
+            ('Living Room', 'binary_sensor.living_room_presence_occupied_combined'),
+            ('Bedroom', 'binary_sensor.bedroom_presence_occupied_combined'),
+          ] %}
+          {% set occupied = rooms | selectattr('1', 'is_state', 'on') | map(attribute='0') | list %}
+          {% if occupied | length == 0 %}
+            Empty
+          {% else %}
+            {{ occupied | join(', ') }}
+          {% endif %}
+        icon: mdi:home-account
+
+      # Room count occupied
+      - name: "Rooms Occupied Count"
+        unique_id: "rooms_occupied_count"
+        state: >
+          {% set count = [
+            states('binary_sensor.office_presence_occupied_combined'),
+            states('binary_sensor.living_room_presence_occupied_combined'),
+            states('binary_sensor.bedroom_presence_occupied_combined'),
+          ] | select('eq', 'on') | list | count %}
+          {{ count }}
+        unit_of_measurement: "rooms"
+        icon: mdi:door-open
+
+      # Overall AQI from ENS160
+      - name: "Home AQI Category"
+        unique_id: "home_aqi_category"
+        state: >
+          {% set aqi = states('sensor.air_quality_monitor_aqi') | int(0) %}
+          {% if aqi == 1 %} Excellent
+          {% elif aqi == 2 %} Good
+          {% elif aqi == 3 %} Moderate
+          {% elif aqi == 4 %} Poor
+          {% elif aqi >= 5 %} Unhealthy
+          {% else %} Unknown
+          {% endif %}
+        icon: >
+          {% set aqi = states('sensor.air_quality_monitor_aqi') | int(0) %}
+          {% if aqi <= 2 %} mdi:emoticon-happy
+          {% elif aqi == 3 %} mdi:emoticon-neutral
+          {% else %} mdi:emoticon-sad
+          {% endif %}
+
+# ============================================================
+# INFLUXDB INTEGRATION (for Grafana dashboards)
+# Add to configuration.yaml
+# ============================================================
+influxdb:
+  host: 192.168.10.83
+  port: 8086
+  database: esp32_sensors
+  username: esp32
+  password: !secret influxdb_esp32_password
+  max_retries: 3
+  default_measurement: state
+  include:
+    entities:
+      - sensor.air_quality_monitor_co2
+      - sensor.air_quality_monitor_pm2_5
+      - sensor.air_quality_monitor_pm10
+      - sensor.air_quality_monitor_voc_index_sen55
+      - sensor.air_quality_monitor_nox_index
+      - sensor.air_quality_monitor_humidity_scd40
+      - sensor.air_quality_monitor_temperature_scd40
+      - sensor.air_quality_monitor_barometric_pressure
+      - sensor.office_presence_still_distance
+      - sensor.office_presence_moving_distance
+      - sensor.office_presence_still_energy
+      - sensor.office_presence_moving_energy
+      - binary_sensor.office_presence_occupied_combined
+      - binary_sensor.living_room_presence_occupied_combined
+      - binary_sensor.bedroom_presence_occupied_combined
+      - sensor.rooms_occupied_count
