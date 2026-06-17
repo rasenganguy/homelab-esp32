@@ -1,21 +1,31 @@
 # ============================================================
-# Homelab Air Quality Monitor Node
-# Hardware: XIAO ESP32-S3 Sense + SCD40 + SEN55 + ENS160 + BMP280
-# All sensors on shared I2C bus via Qwiic/STEMMA QT daisy chain
-# NO SOLDERING REQUIRED — use Qwiic cables throughout
+#  Air Quality Monitor Node
+#  Hardware: XIAO ESP32-S3 Sense + SCD40 + SEN55 + ENS160 + BMP280
 # ============================================================
-# I2C Addresses:
-#   SCD40  = 0x62
-#   SEN55  = 0x69
-#   ENS160 = 0x53
-#   BMP280 = 0x76 or 0x77
+#  Flash command (Windows): tools\windows\flash-windows.bat air-quality-main
+#  Flash command (Linux):   ./tools/linux/flash.sh air-quality-main
 #
-# Wiring (Qwiic chain):
-#   XIAO D4(SDA/GPIO5) → SDA rail
-#   XIAO D5(SCL/GPIO6) → SCL rail
-#   XIAO 3V3           → VCC rail
-#   XIAO GND           → GND rail
-#   Chain: XIAO → SCD40 → SEN55 → ENS160 → BMP280
+#  WHAT EACH SENSOR MEASURES:
+#  ┌─────────┬───────────────────────────────────────────────┐
+#  │ SCD40   │ CO₂ (400-5000ppm), Temperature, Humidity     │
+#  │ SEN55   │ PM1/PM2.5/PM4/PM10 dust, VOC Index, NOx      │
+#  │ ENS160  │ Air Quality Index (AQI 1-5), eCO₂, TVOC      │
+#  │ BMP280  │ Barometric pressure                           │
+#  └─────────┴───────────────────────────────────────────────┘
+#
+#  ALL SENSORS CONNECT VIA I2C (Qwiic cables — no soldering!)
+#
+#  WIRING — Daisy chain with Qwiic cables:
+#    XIAO D4 (GPIO5/SDA) ──► SCD40 ──► SEN55 ──► ENS160 ──► BMP280
+#    XIAO D5 (GPIO6/SCL) ──► (same chain)
+#    XIAO 3.3V ──► VCC on all sensors
+#    XIAO GND  ──► GND on all sensors
+#
+#  I2C ADDRESSES (must all be different — they are):
+#    SCD40   = 0x62
+#    SEN55   = 0x69
+#    ENS160  = 0x53
+#    BMP280  = 0x76
 # ============================================================
 
 substitutions:
@@ -23,19 +33,15 @@ substitutions:
   node_friendly: "Air Quality Monitor"
   location: "living_room"
   update_interval: "60s"
-  co2_warning: "1000"           # PPM — elevated CO2
-  co2_critical: "2000"          # PPM — high CO2, open windows
-  pm25_warning: "25"            # µg/m³ — WHO 24h guideline
-  voc_warning: "200"            # ENS160 index warning level
 
 esphome:
   name: ${node_name}
   friendly_name: ${node_friendly}
-  comment: "Multi-sensor air quality node — SCD40 + SEN55 + ENS160 + BMP280"
+  comment: "Multi-sensor air quality — SCD40 + SEN55 + ENS160 + BMP280"
   on_boot:
     priority: -100
     then:
-      - delay: 5s  # Allow sensors to stabilize
+      - delay: 5s  # Wait for sensors to power up before reading
 
 esp32:
   board: seeed_xiao_esp32s3
@@ -70,27 +76,30 @@ mqtt:
   username: !secret mqtt_username
   password: !secret mqtt_password
   topic_prefix: "homelab/air_quality/${location}"
+  log_topic: null
 
 # ============================================================
-# I2C BUS
+# I2C BUS — The shared communication line for all sensors
 # ============================================================
 i2c:
   sda: GPIO5    # XIAO D4
   scl: GPIO6    # XIAO D5
-  scan: true
+  scan: true    # On boot, lists all found I2C devices in logs (useful for debugging)
   frequency: 100kHz
   id: i2c_bus
 
 sensor:
   # ==========================================================
-  # SCD40 — CO2, Temperature, Humidity (Sensirion)
+  # SCD40 — CO₂, Temperature, Humidity
+  # The most important sensor for air quality.
+  # CO₂ over 1000ppm means you need ventilation.
   # ==========================================================
   - platform: scd4x
     id: scd40_sensor
     i2c_id: i2c_bus
     address: 0x62
     update_interval: ${update_interval}
-    automatic_self_calibration: true
+    automatic_self_calibration: true  # Calibrates itself over time
 
     co2:
       name: "${node_friendly} CO2"
@@ -103,7 +112,7 @@ sensor:
               condition:
                 sensor.in_range:
                   id: co2_level
-                  above: ${co2_critical}
+                  above: 2000
               then:
                 - mqtt.publish:
                     topic: "homelab/air_quality/${location}/alerts/co2"
@@ -113,7 +122,7 @@ sensor:
                     condition:
                       sensor.in_range:
                         id: co2_level
-                        above: ${co2_warning}
+                        above: 1000
                     then:
                       - mqtt.publish:
                           topic: "homelab/air_quality/${location}/alerts/co2"
@@ -124,17 +133,19 @@ sensor:
                           payload: "normal"
 
     temperature:
-      name: "${node_friendly} Temperature (SCD40)"
+      name: "${node_friendly} Temperature"
       id: temp_scd40
       filters:
-        - offset: -2.0   # Compensate for sensor self-heating
+        - offset: -2.0   # The sensor runs warm due to the ESP32 next to it
 
     humidity:
-      name: "${node_friendly} Humidity (SCD40)"
+      name: "${node_friendly} Humidity"
       id: humidity_scd40
 
   # ==========================================================
-  # SEN55 — PM1/PM2.5/PM4/PM10, VOC, NOx, Temp, Humidity
+  # SEN55 — Particulate Matter + VOC + NOx
+  # PM2.5 is fine particles that enter your lungs.
+  # WHO guideline: PM2.5 should be below 15 µg/m³ annual average.
   # ==========================================================
   - platform: sen5x
     id: sen55_sensor
@@ -158,7 +169,7 @@ sensor:
               condition:
                 sensor.in_range:
                   id: pm25_level
-                  above: ${pm25_warning}
+                  above: 25
               then:
                 - mqtt.publish:
                     topic: "homelab/air_quality/${location}/alerts/pm25"
@@ -179,7 +190,7 @@ sensor:
       accuracy_decimals: 1
 
     voc_index:
-      name: "${node_friendly} VOC Index (SEN55)"
+      name: "${node_friendly} VOC Index"
       unit_of_measurement: "index"
 
     nox_index:
@@ -195,14 +206,15 @@ sensor:
       name: "${node_friendly} Humidity (SEN55)"
 
   # ==========================================================
-  # ENS160 — AQI, eCO2, TVOC (ScioSense)
+  # ENS160 — Air Quality Index (AQI), eCO₂, TVOC
+  # AQI: 1=Excellent, 2=Good, 3=Moderate, 4=Poor, 5=Unhealthy
   # ==========================================================
   - platform: ens160_i2c
     i2c_id: i2c_bus
     address: 0x53
     update_interval: ${update_interval}
     compensation:
-      temperature_source: temp_scd40    # Feed SCD40 temp for accuracy
+      temperature_source: temp_scd40
       humidity_source: humidity_scd40
 
     eco2:
@@ -220,7 +232,7 @@ sensor:
       id: aqi_level
 
   # ==========================================================
-  # BMP280 — Barometric Pressure (backup temp/humidity)
+  # BMP280 — Barometric Pressure
   # ==========================================================
   - platform: bmp280_i2c
     i2c_id: i2c_bus
@@ -236,7 +248,6 @@ sensor:
       name: "${node_friendly} Barometric Pressure"
       unit_of_measurement: "hPa"
 
-  # WiFi / system
   - platform: wifi_signal
     name: "${node_friendly} WiFi Signal"
     update_interval: 60s
@@ -246,7 +257,7 @@ sensor:
     update_interval: 60s
 
 # ============================================================
-# AQI Status Text
+# TEXT SENSOR — Overall air quality status string
 # ============================================================
 text_sensor:
   - platform: template
@@ -262,15 +273,12 @@ text_sensor:
 
   - platform: wifi_info
     ip_address:
-      name: "${node_friendly} IP"
+      name: "${node_friendly} IP Address"
 
 button:
   - platform: restart
     name: "${node_friendly} Restart"
 
-# ============================================================
-# Status LED
-# ============================================================
 light:
   - platform: esp32_rmt_led_strip
     id: status_led
@@ -281,12 +289,3 @@ light:
     chipset: WS2812
     rgb_order: GRB
     default_transition_length: 500ms
-    effects:
-      - automation:
-          name: "AQI Status"
-          sequence:
-            - light.turn_on:
-                id: status_led
-                red: !lambda "return id(co2_level).state > 2000 ? 1.0 : 0.0;"
-                green: !lambda "return id(co2_level).state < 800 ? 1.0 : 0.0;"
-                blue: 0%
