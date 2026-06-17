@@ -1,37 +1,48 @@
 # ============================================================
-# Thermal Presence Sensor — AMG8833 8x8 Grid-EYE
-# BONUS PROJECT: Detects heat signatures with room-level heatmap
-# Hardware: XIAO ESP32-S3 Sense + AMG8833 (Qwiic/I2C)
+#  Thermal Presence Sensor — AMG8833 8x8 Thermal Grid
 # ============================================================
-# Capabilities:
-#   - 8x8 = 64 pixel thermal grid (-20°C to 100°C)
-#   - Detects humans, pets, AND warm objects (mice, cats)
-#   - 10 FPS refresh rate
-#   - 7m detection range
-#   - Feeds heatmap data to HA for visualization
-#   - Person counting via zone detection (up to 2 people)
+#  Flash command (Windows): tools\windows\flash-windows.bat thermal-sensor-office
+#  Flash command (Linux):   ./tools/linux/flash.sh thermal-sensor-office
 #
-# Wiring (Qwiic — no soldering):
-#   AMG8833 SDA → XIAO D4 (GPIO5)
-#   AMG8833 SCL → XIAO D5 (GPIO6)
-#   AMG8833 VCC → XIAO 3V3
-#   AMG8833 GND → XIAO GND
-#   AMG8833 INT → XIAO D0 (GPIO1) [optional interrupt pin]
+#  WHAT IS THE AMG8833?
+#  It's a 8x8 pixel thermal "camera" — imagine a grid of 64 tiny
+#  thermometers arranged in a square. It detects heat, not light.
+#  It can see in pitch darkness, through light fabric, and at 10fps.
+#
+#  WHAT IT DETECTS:
+#  - Any heat source above the threshold temperature
+#  - Humans (body surface ~32-36°C through clothes: ~28-34°C)
+#  - Pets (cats ~35°C, dogs ~37°C — very similar to humans)
+#  - Hot appliances (oven, TV, laptop — stays on after person leaves)
+#  - Person count estimate (1 person vs 2+ based on hot pixel area)
+#
+#  WHY USE THIS ALONGSIDE LD2410C?
+#  - LD2410C can be fooled by curtains moving in AC airflow
+#  - AMG8833 confirms with heat — no false positives from drafts
+#  - Thermal can detect direction (entering or leaving a zone)
+#
+#  WIRING (Qwiic cable — no soldering):
+#    AMG8833 SDA → XIAO D4 (GPIO5)
+#    AMG8833 SCL → XIAO D5 (GPIO6)
+#    AMG8833 VCC → XIAO 3.3V
+#    AMG8833 GND → XIAO GND
+#    AMG8833 INT → XIAO D0 (GPIO1) [optional interrupt]
 # ============================================================
 
 substitutions:
   node_name: "thermal-sensor-office"
-  node_friendly: "Office Thermal Sensor"
+  node_friendly: "Office Thermal"
   room_name: "office"
-  # Threshold temperature to count as "human present" (°C)
-  # Human skin: 32-36°C; body surface through clothes: 28-34°C
+  # Temperature above which a pixel counts as "human heat"
+  # Adjust based on season:
+  #   Summer: 30.0, Winter: 26.0, To detect pets too: 25.0
   human_temp_threshold: "28.0"
   update_interval: "2s"
 
 esphome:
   name: ${node_name}
   friendly_name: ${node_friendly}
-  comment: "AMG8833 thermal presence with person counting"
+  comment: "AMG8833 thermal grid — presence + person counting"
 
 esp32:
   board: seeed_xiao_esp32s3
@@ -58,12 +69,15 @@ wifi:
     password: !secret wifi_fallback_password
 
 captive_portal:
+web_server:
+  port: 80
 
 mqtt:
   broker: !secret mqtt_broker
   username: !secret mqtt_username
   password: !secret mqtt_password
   topic_prefix: "homelab/thermal/${room_name}"
+  log_topic: null
 
 i2c:
   sda: GPIO5
@@ -72,13 +86,13 @@ i2c:
 
 sensor:
   # ============================================================
-  # AMG8833 — All 64 pixel temperatures + aggregates
+  # AMG8833 — Aggregate readings from the 8x8 grid
   # ============================================================
   - platform: amg8833
     id: amg8833_sensor
     update_interval: ${update_interval}
 
-    # Max temperature in frame (good for presence detection)
+    # Highest temperature in the entire 8x8 frame
     max_temperature:
       name: "${node_friendly} Max Temp"
       id: max_temp
@@ -90,22 +104,23 @@ sensor:
               id: heat_presence
               state: !lambda "return x > ${human_temp_threshold};"
 
-    # Min temperature
+    # Lowest temperature in the frame
     min_temperature:
       name: "${node_friendly} Min Temp"
       unit_of_measurement: "°C"
 
-    # Average temperature across full frame
+    # Average temperature across all 64 pixels
     average_temperature:
       name: "${node_friendly} Avg Frame Temp"
       unit_of_measurement: "°C"
 
-    # Built-in thermistor (ambient)
+    # The sensor's own thermistor (ambient room temp)
     thermistor_temperature:
       name: "${node_friendly} Ambient Temp"
       unit_of_measurement: "°C"
 
-    # Number of pixels above human threshold = person count estimate
+    # How many of the 64 pixels are above the human-temp threshold
+    # 0 = empty, 1-8 = probably 1 person, 9-16 = probably 2 people
     pixels_above_threshold:
       name: "${node_friendly} Hot Pixels"
       id: hot_pixels
@@ -124,22 +139,21 @@ sensor:
     name: "${node_friendly} Uptime"
 
 binary_sensor:
-  # Heat-based presence detection
+  # Main presence detection via heat
   - platform: template
     name: "${node_friendly} Heat Presence"
     id: heat_presence
     device_class: occupancy
 
-  # Person count estimate (crude — 1 or 2+)
+  # Are there likely 2 or more people?
   - platform: template
     name: "${node_friendly} Multiple People"
-    id: multi_person
     device_class: occupancy
     lambda: |-
-      return id(hot_pixels).state > 12;  // Rough threshold for 2 people
+      return id(hot_pixels).state > 12;
 
 text_sensor:
-  # Person count category
+  # Human-readable occupancy estimate
   - platform: template
     name: "${node_friendly} Occupancy Count"
     update_interval: ${update_interval}
@@ -149,6 +163,10 @@ text_sensor:
       if (pixels <= 8) return {"1 Person"};
       if (pixels <= 16) return {"2 People"};
       return {"3+ People"};
+
+  - platform: wifi_info
+    ip_address:
+      name: "${node_friendly} IP Address"
 
 button:
   - platform: restart
