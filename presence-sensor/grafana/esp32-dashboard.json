@@ -1,0 +1,213 @@
+{
+  "__comment": "Import this into Grafana via Dashboards → Import → Upload JSON",
+  "__note": "Update datasource UID to match your InfluxDB datasource in Grafana",
+  "title": "Homelab ESP32 Sensors",
+  "uid": "esp32-homelab",
+  "schemaVersion": 38,
+  "tags": ["homelab", "esp32", "presence", "air-quality"],
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "title": "CO2 Levels (24h)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ppm",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 800 },
+              { "color": "orange", "value": 1000 },
+              { "color": "red", "value": 2000 }
+            ]
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawQuery": true,
+          "query": "SELECT mean(\"value\") FROM \"state\" WHERE \"entity_id\" = 'sensor.air_quality_monitor_co2' AND $timeFilter GROUP BY time($__interval) fill(previous)",
+          "alias": "CO2 (ppm)"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      }
+    },
+    {
+      "title": "PM2.5 Particulates (24h)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "µg/m³",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 12 },
+              { "color": "orange", "value": 25 },
+              { "color": "red", "value": 55 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawQuery": true,
+          "query": "SELECT mean(\"value\") FROM \"state\" WHERE \"entity_id\" = 'sensor.air_quality_monitor_pm2_5' AND $timeFilter GROUP BY time($__interval) fill(previous)",
+          "alias": "PM2.5"
+        },
+        {
+          "rawQuery": true,
+          "query": "SELECT mean(\"value\") FROM \"state\" WHERE \"entity_id\" = 'sensor.air_quality_monitor_pm10' AND $timeFilter GROUP BY time($__interval) fill(previous)",
+          "alias": "PM10"
+        }
+      ]
+    },
+    {
+      "title": "Room Occupancy (Current)",
+      "type": "stat",
+      "gridPos": { "x": 0, "y": 8, "w": 8, "h": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "options": { "on": { "text": "Occupied", "color": "green" }, "off": { "text": "Empty", "color": "gray" } }, "type": "value" }
+          ]
+        }
+      },
+      "targets": [
+        {
+          "rawQuery": true,
+          "query": "SELECT last(\"value\") FROM \"state\" WHERE \"entity_id\" = 'binary_sensor.office_presence_occupied_combined' AND $timeFilter",
+          "alias": "Office"
+        },
+        {
+          "rawQuery": true,
+          "query": "SELECT last(\"value\") FROM \"state\" WHERE \"entity_id\" = 'binary_sensor.living_room_presence_occupied_combined' AND $timeFilter",
+          "alias": "Living Room"
+        },
+        {
+          "rawQuery": true,
+          "query": "SELECT last(\"value\") FROM \"state\" WHERE \"entity_id\" = 'binary_sensor.bedroom_presence_occupied_combined' AND $timeFilter",
+          "alias": "Bedroom"
+        }
+      ]
+    },
+    {
+      "title": "Temperature & Humidity (24h)",
+      "type": "timeseries",
+      "gridPos": { "x": 8, "y": 8, "w": 16, "h": 8 },
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Humidity" },
+            "properties": [
+              { "id": "unit", "value": "humidity" },
+              { "id": "custom.axisPlacement", "value": "right" }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Temperature" },
+            "properties": [
+              { "id": "unit", "value": "celsius" }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "rawQuery": true,
+          "query": "SELECT mean(\"value\") FROM \"state\" WHERE \"entity_id\" = 'sensor.air_quality_monitor_temperature_scd40' AND $timeFilter GROUP BY time($__interval) fill(previous)",
+          "alias": "Temperature"
+        },
+        {
+          "rawQuery": true,
+          "query": "SELECT mean(\"value\") FROM \"state\" WHERE \"entity_id\" = 'sensor.air_quality_monitor_humidity_scd40' AND $timeFilter GROUP BY time($__interval) fill(previous)",
+          "alias": "Humidity"
+        }
+      ]
+    },
+    {
+      "title": "VOC & NOx Index (24h)",
+      "type": "timeseries",
+      "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "index",
+          "min": 0,
+          "max": 500,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 150 },
+              { "color": "red", "value": 250 }
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "rawQuery": true,
+          "query": "SELECT mean(\"value\") FROM \"state\" WHERE \"entity_id\" = 'sensor.air_quality_monitor_voc_index_sen55' AND $timeFilter GROUP BY time($__interval) fill(previous)",
+          "alias": "VOC Index"
+        },
+        {
+          "rawQuery": true,
+          "query": "SELECT mean(\"value\") FROM \"state\" WHERE \"entity_id\" = 'sensor.air_quality_monitor_nox_index' AND $timeFilter GROUP BY time($__interval) fill(previous)",
+          "alias": "NOx Index"
+        }
+      ]
+    },
+    {
+      "title": "Presence Detection Distance (Office)",
+      "type": "timeseries",
+      "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "cm",
+          "min": 0,
+          "max": 600
+        }
+      },
+      "targets": [
+        {
+          "rawQuery": true,
+          "query": "SELECT mean(\"value\") FROM \"state\" WHERE \"entity_id\" = 'sensor.office_presence_still_distance' AND $timeFilter GROUP BY time($__interval) fill(previous)",
+          "alias": "Still Distance"
+        },
+        {
+          "rawQuery": true,
+          "query": "SELECT mean(\"value\") FROM \"state\" WHERE \"entity_id\" = 'sensor.office_presence_moving_distance' AND $timeFilter GROUP BY time($__interval) fill(previous)",
+          "alias": "Moving Distance"
+        }
+      ]
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "CO2 Warning",
+        "datasource": "InfluxDB",
+        "rawQuery": "SELECT time, 'CO2 > 1000ppm' as text FROM \"state\" WHERE \"entity_id\" = 'sensor.air_quality_monitor_co2' AND \"value\" > 1000 AND $timeFilter",
+        "iconColor": "orange",
+        "enable": true
+      }
+    ]
+  }
+}
