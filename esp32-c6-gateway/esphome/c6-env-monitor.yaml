@@ -1,44 +1,48 @@
 # ============================================================
-# XIAO ESP32-C6 — WiFi Environmental Monitor + Gateway Node
+#  XIAO ESP32-C6 — Environmental Monitor
 # ============================================================
-# The ESP32-C6 is NOT recommended for CSI presence sensing
-# (only 512KB SRAM, insufficient for CSI buffers).
+#  Flash command (Windows): tools\windows\flash-windows.bat c6-env-monitor
+#  Flash command (Linux):   ./tools/linux/flash.sh c6-env-monitor
 #
-# BEST USE CASE for C6 in your homelab:
-#   - Environmental sensor node (BME280/SHT31 via I2C)
-#   - WiFi 6 (802.11ax) network probe/reporter
-#   - Lightweight MQTT sensor with ultra-low power deep sleep
-#   - Future: Thread/Matter border router (requires separate firmware)
+#  WHY USE THE C6 FOR THIS AND NOT THE S3?
+#  The C6 only has 512KB RAM — not enough for complex sensor fusion.
+#  But for a simple BME280 temperature/humidity/pressure sensor it's perfect.
+#  The C6 also has WiFi 6 (802.11ax) which uses less power.
 #
-# Wiring:
-#   BME280 SDA → GPIO6 (D4)
-#   BME280 SCL → GPIO7 (D5)
-#   BME280 VCC → 3V3
-#   BME280 GND → GND
+#  IMPORTANT: The C6 REQUIRES esp-idf framework (NOT arduino).
+#  This is already set below. If you change it to arduino it won't compile.
+#
+#  WIRING:
+#    BME280 SDA → XIAO C6 D4 (GPIO6)
+#    BME280 SCL → XIAO C6 D5 (GPIO7)
+#    BME280 VCC → XIAO C6 3.3V
+#    BME280 GND → XIAO C6 GND
+#
+#  NOTE: The C6 pin numbers are different from the S3!
+#  Always check the silk-screen labels on the board (D0, D1, etc.)
 # ============================================================
 
 substitutions:
   node_name: "c6-env-monitor"
-  node_friendly: "C6 Environment Monitor"
+  node_friendly: "C6 Env Monitor"
   room_name: "hallway"
   update_interval: "30s"
-  deep_sleep_duration: "25s"   # Sleep between readings to save power
 
 esphome:
   name: ${node_name}
   friendly_name: ${node_friendly}
-  comment: "XIAO ESP32-C6 environmental monitor — WiFi 6"
+  comment: "XIAO ESP32-C6 with BME280 — WiFi 6 environmental monitor"
 
 esp32:
   board: seeed_xiao_esp32c6
   variant: esp32c6
   framework:
-    type: esp-idf
+    type: esp-idf        # ← REQUIRED for C6. Do not change to arduino.
     version: recommended
 
 logger:
   level: INFO
-  baud_rate: 0  # Disable USB logging in production to save power
+  baud_rate: 0           # Disables USB serial logging (saves power in production)
 
 api:
   encryption:
@@ -52,8 +56,8 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  fast_connect: true           # Skip SSID scan for faster connect
-  power_save_mode: HIGH        # WiFi 6 TWT power save
+  fast_connect: true     # Skip WiFi scan, connect directly — faster boot
+  power_save_mode: HIGH  # WiFi 6 Target Wake Time power saving
   ap:
     ssid: "${node_name}-fallback"
     password: !secret wifi_fallback_password
@@ -65,21 +69,18 @@ mqtt:
   username: !secret mqtt_username
   password: !secret mqtt_password
   topic_prefix: "homelab/environment/${room_name}"
-  discovery: false
+  log_topic: null
 
-# ============================================================
-# I2C Bus
-# ============================================================
 i2c:
   sda: GPIO6
   scl: GPIO7
   scan: true
   id: i2c_bus
 
-# ============================================================
-# BME280 — Temperature, Humidity, Pressure
-# ============================================================
 sensor:
+  # ============================================================
+  # BME280 — Temperature, Humidity, Barometric Pressure
+  # ============================================================
   - platform: bme280_i2c
     i2c_id: i2c_bus
     address: 0x76
@@ -87,7 +88,7 @@ sensor:
       name: "${node_friendly} Temperature"
       oversampling: 16x
       filters:
-        - offset: -1.5  # Compensate for self-heating from MCU
+        - offset: -1.5   # The C6 chip generates heat — compensate
     humidity:
       name: "${node_friendly} Humidity"
       oversampling: 16x
@@ -96,19 +97,9 @@ sensor:
       oversampling: 16x
     update_interval: ${update_interval}
 
-  # WiFi Signal
   - platform: wifi_signal
     name: "${node_friendly} WiFi Signal"
     update_interval: 60s
-
-  # Battery voltage (if running on LiPo — A0/GPIO2)
-  - platform: adc
-    pin: GPIO2
-    name: "${node_friendly} Battery Voltage"
-    update_interval: 60s
-    attenuation: 12db
-    filters:
-      - multiply: 2.0  # Voltage divider 1:1
 
   - platform: uptime
     name: "${node_friendly} Uptime"
@@ -125,11 +116,12 @@ button:
     name: "${node_friendly} Restart"
 
 # ============================================================
-# Optional: Deep Sleep for battery-powered deployments
-# Uncomment to enable. Node will wake, report, and sleep.
+# DEEP SLEEP — Optional for battery-powered deployments
+# If you power this from a battery (LiPo), uncomment this block.
+# The board will: wake up → take reading → publish → go back to sleep.
+# Each cycle uses almost zero battery.
 # ============================================================
 # deep_sleep:
 #   id: deep_sleep_control
-#   run_duration: 10s
-#   sleep_duration: ${deep_sleep_duration}
-#   wakeup_pin: GPIO9  # Optional: wake on GPIO trigger
+#   run_duration: 15s      # Stay awake 15s to connect WiFi and publish
+#   sleep_duration: 5min   # Sleep 5 minutes between readings
