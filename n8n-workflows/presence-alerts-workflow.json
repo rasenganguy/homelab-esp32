@@ -1,0 +1,113 @@
+{
+  "name": "ESP32 Presence Alerts",
+  "__description": "Import this workflow into n8n via Workflows → Import from File",
+  "__note": "Replace Telegram chat ID and MQTT broker credentials in credentials manager",
+  "nodes": [
+    {
+      "id": "mqtt-trigger",
+      "name": "MQTT: Presence Events",
+      "type": "n8n-nodes-base.mqttTrigger",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "parameters": {
+        "topics": "homelab/presence/+/occupied",
+        "options": {
+          "qos": 1
+        }
+      },
+      "credentials": {
+        "mqtt": {
+          "id": "mqtt-homelab",
+          "name": "Homelab MQTT"
+        }
+      }
+    },
+    {
+      "id": "code-parse",
+      "name": "Parse Presence Event",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300],
+      "parameters": {
+        "jsCode": "const topic = $input.first().json.topic;\nconst payload = $input.first().json.message;\n\n// Extract room from topic: homelab/presence/{room}/occupied\nconst parts = topic.split('/');\nconst room = parts[2];\n\n// Format room name nicely\nconst roomNames = {\n  'office': 'Office',\n  'livingroom': 'Living Room',\n  'bedroom': 'Bedroom',\n  'kitchen': 'Kitchen'\n};\n\nreturn [{\n  json: {\n    room: room,\n    roomName: roomNames[room] || room,\n    occupied: payload === 'true',\n    timestamp: new Date().toISOString(),\n    emoji: payload === 'true' ? '🟢' : '⚪'\n  }\n}];"
+      }
+    },
+    {
+      "id": "filter-changes",
+      "name": "Filter Significant Changes",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 1,
+      "position": [650, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "leftValue": "={{ $json.room }}",
+            "operation": "notEmpty"
+          }
+        }
+      }
+    },
+    {
+      "id": "http-ha",
+      "name": "Update HA State",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "=http://192.168.50.127:8123/api/states/input_boolean.{{ $json.room }}_occupied",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={\n  \"state\": \"{{ $json.occupied ? 'on' : 'off' }}\",\n  \"attributes\": {\n    \"friendly_name\": \"{{ $json.roomName }} Occupied (n8n)\",\n    \"last_updated\": \"{{ $json.timestamp }}\"\n  }\n}"
+      }
+    },
+    {
+      "id": "telegram-notify",
+      "name": "Telegram: Room Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1,
+      "position": [850, 400],
+      "parameters": {
+        "chatId": "-4985168305",
+        "text": "={{ $json.emoji }} {{ $json.roomName }}: {{ $json.occupied ? 'occupied' : 'now empty' }}\n🕐 {{ new Date($json.timestamp).toLocaleTimeString() }}",
+        "additionalFields": {
+          "parse_mode": "HTML"
+        }
+      },
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram-homelab",
+          "name": "HomeLab Telegram"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "MQTT: Presence Events": {
+      "main": [
+        [{ "node": "Parse Presence Event", "type": "main", "index": 0 }]
+      ]
+    },
+    "Parse Presence Event": {
+      "main": [
+        [{ "node": "Filter Significant Changes", "type": "main", "index": 0 }]
+      ]
+    },
+    "Filter Significant Changes": {
+      "main": [
+        [
+          { "node": "Update HA State", "type": "main", "index": 0 },
+          { "node": "Telegram: Room Alert", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  }
+}
