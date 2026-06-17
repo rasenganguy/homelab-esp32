@@ -1,0 +1,20 @@
+# ============================================================
+# Bedroom Presence Node — Instance Config
+# ============================================================
+# Flash command: esphome run presence-bedroom.yaml
+# Note: Higher sensitivity thresholds for detecting sleeping person
+# ============================================================
+
+substitutions:
+  node_name: "presence-bedroom"
+  node_friendly: "Bedroom Presence"
+  room_name: "bedroom"
+  ld2410_max_distance: "4m"
+  ld2410_still_threshold: "10"  # Lower threshold = more sensitive (detect sleeping)
+  ld2410_move_threshold: "15"
+  pir_delay_off: "20s"          # Longer delay so brief bathroom trips don't clear presence
+  update_interval: "5s"
+  log_level: "INFO"
+
+packages:
+  base: !include presence-node.yaml
