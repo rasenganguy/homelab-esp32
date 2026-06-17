@@ -1,26 +1,26 @@
 # ============================================================
-# Homelab Presence Sensor Node
-# Hardware: Seeed XIAO ESP32-S3 Sense + HLK-LD2410C + AM312 PIR
+#  PRESENCE NODE — Shared Base Configuration
+#  Hardware: Seeed XIAO ESP32-S3 Sense + HLK-LD2410C + AM312 PIR
 # ============================================================
-# Per-node customization: change substitutions below only.
-# All other YAML is shared across every room node.
+#  HOW THIS FILE WORKS:
+#  This file is the "template" that all room nodes share.
+#  You never flash this file directly. Instead, you flash one of:
+#    presence-office.yaml
+#    presence-livingroom.yaml
+#    presence-bedroom.yaml
+#  Those files set the room-specific variables and then load this file.
+#
+#  WHAT THIS NODE DOES:
+#  - The LD2410C radar detects if anyone is in the room (even sitting still)
+#  - The AM312 PIR detects quick motion (someone walking in)
+#  - Both are combined into one "Occupied" sensor in Home Assistant
+#  - All data is sent to HA via WiFi automatically
 # ============================================================
-
-substitutions:
-  node_name: "presence-office"          # Change per room: presence-livingroom, presence-bedroom, etc.
-  node_friendly: "Office Presence"      # Human-readable name shown in HA
-  room_name: "office"                   # Lowercase, no spaces — used in MQTT topics
-  ld2410_max_distance: "6m"            # Detection range: 2m/4m/6m (default 6m)
-  ld2410_still_threshold: "20"         # Still target energy threshold (0-100, lower = more sensitive)
-  ld2410_move_threshold: "20"          # Moving target energy threshold (0-100)
-  pir_delay_off: "10s"                 # How long PIR stays "true" after last motion
-  update_interval: "5s"                # Sensor reporting interval
-  log_level: "INFO"                    # DEBUG / INFO / WARN
 
 esphome:
   name: ${node_name}
   friendly_name: ${node_friendly}
-  comment: "Room presence node — ESP32-S3 + LD2410C mmWave + AM312 PIR"
+  comment: "Presence node — XIAO ESP32-S3 + LD2410C + AM312"
 
 esp32:
   board: seeed_xiao_esp32s3
@@ -29,37 +29,50 @@ esp32:
     type: arduino
 
 # ============================================================
-# CORE SERVICES
+# LOGGING
+# Shows messages in the console when flashing/debugging
 # ============================================================
 logger:
   level: ${log_level}
 
+# ============================================================
+# HOME ASSISTANT API
+# This is how HA discovers and controls the device
+# ============================================================
 api:
   encryption:
     key: !secret ha_api_key
 
+# ============================================================
+# OTA (Over-The-Air updates)
+# After first flash, you can push updates over WiFi — no USB needed
+# ============================================================
 ota:
   - platform: esphome
     password: !secret ha_ota_password
 
+# ============================================================
+# WIFI
+# ============================================================
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  domain: ".iot.local"
-  # Force onto IoT VLAN 5 by connecting to IoT SSID
-  # UniFi SSID for VLAN 5 should be separate from trusted SSID
 
+  # Fallback Access Point — if the board can't connect to WiFi,
+  # it creates its own hotspot so you can fix the settings.
   ap:
     ssid: "${node_name}-fallback"
     password: !secret wifi_fallback_password
 
+# Shows a webpage at the board's IP address with sensor values
 captive_portal:
-
 web_server:
   port: 80
 
 # ============================================================
-# MQTT — publishes to HA MQTT broker for n8n/Grafana consumers
+# MQTT
+# Sends sensor data to your HA MQTT broker so n8n and Grafana
+# can also read the data (not just HA)
 # ============================================================
 mqtt:
   broker: !secret mqtt_broker
@@ -69,34 +82,46 @@ mqtt:
   birth_message:
     topic: "homelab/presence/${room_name}/status"
     payload: "online"
+    retain: true
   will_message:
     topic: "homelab/presence/${room_name}/status"
     payload: "offline"
-  log_topic: null  # Suppress MQTT log spam
+    retain: true
+  log_topic: null
 
 # ============================================================
-# UART — LD2410C communication
+# UART — Serial connection to the LD2410C radar
+#
+# The LD2410C talks to the ESP32 over a serial (UART) connection.
+# Think of it like old-school RS-232 — two wires TX and RX.
+#
+# WIRING:
+#   LD2410C TX  →  XIAO D7 (GPIO44)  ← radar SENDS data here
+#   LD2410C RX  →  XIAO D6 (GPIO43)  ← radar RECEIVES commands here
+#   LD2410C VCC →  XIAO 3.3V
+#   LD2410C GND →  XIAO GND
 # ============================================================
 uart:
   id: ld2410_uart
-  tx_pin: GPIO43   # XIAO D6
-  rx_pin: GPIO44   # XIAO D7
+  tx_pin: GPIO43
+  rx_pin: GPIO44
   baud_rate: 256000
   parity: NONE
   stop_bits: 1
 
 # ============================================================
-# LD2410C mmWave RADAR
+# LD2410C RADAR COMPONENT
 # ============================================================
 ld2410:
   id: ld2410_sensor
   uart_id: ld2410_uart
 
 # ============================================================
-# BINARY SENSORS
+# BINARY SENSORS — True/False values (on or off)
 # ============================================================
 binary_sensor:
-  # LD2410C — Has any target (moving OR still)
+
+  # ---- LD2410C: Is there a target at all? (moving OR still) ----
   - platform: ld2410
     ld2410_id: ld2410_sensor
     has_target:
@@ -116,7 +141,7 @@ binary_sensor:
               payload: "false"
               retain: true
 
-  # LD2410C — Moving target detected
+  # ---- LD2410C: Is there something MOVING? ----
   - platform: ld2410
     ld2410_id: ld2410_sensor
     has_moving_target:
@@ -124,7 +149,7 @@ binary_sensor:
       id: room_motion
       device_class: motion
 
-  # LD2410C — Still target detected (person sitting/sleeping)
+  # ---- LD2410C: Is there something STILL? (person sitting/sleeping) ----
   - platform: ld2410
     ld2410_id: ld2410_sensor
     has_still_target:
@@ -132,10 +157,14 @@ binary_sensor:
       id: room_still
       device_class: occupancy
 
-  # AM312 PIR — Fast motion trigger
+  # ---- AM312 PIR: Fast motion trigger ----
+  # WIRING:
+  #   AM312 OUT → XIAO D1 (GPIO2)
+  #   AM312 VCC → XIAO 3.3V
+  #   AM312 GND → XIAO GND
   - platform: gpio
     pin:
-      number: GPIO2   # XIAO D1
+      number: GPIO2
       mode: INPUT
     name: "${node_friendly} PIR"
     id: pir_sensor
@@ -143,44 +172,48 @@ binary_sensor:
     filters:
       - delayed_off: ${pir_delay_off}
 
-  # Combined virtual sensor — OR of LD2410 + PIR
+  # ---- COMBINED: Room is occupied if EITHER radar OR PIR says so ----
+  # This is the main sensor you'll use in HA automations
   - platform: template
     name: "${node_friendly} Occupied (Combined)"
     id: combined_presence
     device_class: occupancy
     lambda: |-
       return id(room_occupied).state || id(pir_sensor).state;
-    on_press:
-      then:
-        - light.turn_on: status_led
-    on_release:
-      then:
-        - light.turn_off: status_led
 
 # ============================================================
-# SENSORS
+# SENSORS — Numeric values
 # ============================================================
 sensor:
-  # LD2410C — Detection distances
+
+  # How far away is the moving target? (in centimeters)
   - platform: ld2410
     ld2410_id: ld2410_sensor
     moving_distance:
       name: "${node_friendly} Moving Distance"
       unit_of_measurement: "cm"
       update_interval: ${update_interval}
+
+  # How far away is the still target?
+  - platform: ld2410
+    ld2410_id: ld2410_sensor
     still_distance:
       name: "${node_friendly} Still Distance"
       unit_of_measurement: "cm"
       update_interval: ${update_interval}
+
+  # Signal strength of the moving target (0-100)
+  - platform: ld2410
+    ld2410_id: ld2410_sensor
     moving_energy:
       name: "${node_friendly} Moving Energy"
       update_interval: ${update_interval}
+
+  # Signal strength of the still target (0-100)
+  - platform: ld2410
+    ld2410_id: ld2410_sensor
     still_energy:
       name: "${node_friendly} Still Energy"
-      update_interval: ${update_interval}
-    detection_distance:
-      name: "${node_friendly} Detection Distance"
-      unit_of_measurement: "cm"
       update_interval: ${update_interval}
 
   # WiFi signal strength
@@ -188,13 +221,14 @@ sensor:
     name: "${node_friendly} WiFi Signal"
     update_interval: 60s
 
-  # Uptime
+  # How long the board has been running
   - platform: uptime
     name: "${node_friendly} Uptime"
     update_interval: 60s
 
 # ============================================================
-# STATUS LED (onboard NeoPixel on XIAO S3)
+# STATUS LED — The tiny RGB light on the XIAO board
+# Green blink = occupied, off = empty
 # ============================================================
 light:
   - platform: esp32_rmt_led_strip
@@ -206,25 +240,18 @@ light:
     chipset: WS2812
     rgb_order: GRB
     default_transition_length: 0s
-    effects:
-      - pulse:
-          name: "Pulse"
-          transition_length: 1s
-          update_interval: 2s
 
 # ============================================================
-# BUTTONS
+# BUTTONS — Appear in HA as controls
 # ============================================================
 button:
   - platform: restart
     name: "${node_friendly} Restart"
   - platform: safe_mode
     name: "${node_friendly} Safe Mode"
-  - platform: factory_reset
-    name: "${node_friendly} Factory Reset"
 
 # ============================================================
-# TEXT SENSOR
+# TEXT SENSORS — Show text info in HA
 # ============================================================
 text_sensor:
   - platform: wifi_info
@@ -233,13 +260,13 @@ text_sensor:
     ssid:
       name: "${node_friendly} SSID"
     mac_address:
-      name: "${node_friendly} MAC"
-
+      name: "${node_friendly} MAC Address"
   - platform: version
     name: "${node_friendly} ESPHome Version"
 
 # ============================================================
-# NUMBER — LD2410C runtime tuning via HA
+# NUMBERS — Sliders in HA to tune the radar at runtime
+# (No need to reflash to change sensitivity!)
 # ============================================================
 number:
   - platform: ld2410
@@ -252,7 +279,7 @@ number:
       name: "${node_friendly} Max Still Distance"
 
 # ============================================================
-# SELECT — LD2410C mode
+# SELECT — Dropdowns in HA
 # ============================================================
 select:
   - platform: ld2410
@@ -261,7 +288,7 @@ select:
       name: "${node_friendly} Distance Resolution"
 
 # ============================================================
-# SWITCH
+# SWITCHES — Toggles in HA
 # ============================================================
 switch:
   - platform: ld2410
