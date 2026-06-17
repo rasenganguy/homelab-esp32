@@ -1,20 +1,12 @@
 ---
-# ============================================================
-# Ansible Inventory — ESP32 Homelab Nodes
-# ============================================================
-
 all:
   children:
     esphome_host:
       hosts:
-        # Run ESPHome dashboard on CT109 (Grafana/InfluxDB LXC)
-        # or dedicate a new LXC for it
         192.168.10.83:
           ansible_user: root
           ansible_python_interpreter: /usr/bin/python3
 
-    # ESP32 nodes are managed via ESPHome dashboard, not Ansible directly.
-    # These entries are for inventory/documentation purposes.
     esp32_nodes:
       hosts:
         presence-office:
