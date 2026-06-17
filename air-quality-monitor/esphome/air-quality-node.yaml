@@ -1,0 +1,292 @@
+# ============================================================
+# Homelab Air Quality Monitor Node
+# Hardware: XIAO ESP32-S3 Sense + SCD40 + SEN55 + ENS160 + BMP280
+# All sensors on shared I2C bus via Qwiic/STEMMA QT daisy chain
+# NO SOLDERING REQUIRED — use Qwiic cables throughout
+# ============================================================
+# I2C Addresses:
+#   SCD40  = 0x62
+#   SEN55  = 0x69
+#   ENS160 = 0x53
+#   BMP280 = 0x76 or 0x77
+#
+# Wiring (Qwiic chain):
+#   XIAO D4(SDA/GPIO5) → SDA rail
+#   XIAO D5(SCL/GPIO6) → SCL rail
+#   XIAO 3V3           → VCC rail
+#   XIAO GND           → GND rail
+#   Chain: XIAO → SCD40 → SEN55 → ENS160 → BMP280
+# ============================================================
+
+substitutions:
+  node_name: "air-quality-main"
+  node_friendly: "Air Quality Monitor"
+  location: "living_room"
+  update_interval: "60s"
+  co2_warning: "1000"           # PPM — elevated CO2
+  co2_critical: "2000"          # PPM — high CO2, open windows
+  pm25_warning: "25"            # µg/m³ — WHO 24h guideline
+  voc_warning: "200"            # ENS160 index warning level
+
+esphome:
+  name: ${node_name}
+  friendly_name: ${node_friendly}
+  comment: "Multi-sensor air quality node — SCD40 + SEN55 + ENS160 + BMP280"
+  on_boot:
+    priority: -100
+    then:
+      - delay: 5s  # Allow sensors to stabilize
+
+esp32:
+  board: seeed_xiao_esp32s3
+  variant: esp32s3
+  framework:
+    type: arduino
+
+logger:
+  level: INFO
+
+api:
+  encryption:
+    key: !secret ha_api_key
+
+ota:
+  - platform: esphome
+    password: !secret ha_ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${node_name}-fallback"
+    password: !secret wifi_fallback_password
+
+captive_portal:
+web_server:
+  port: 80
+
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  topic_prefix: "homelab/air_quality/${location}"
+
+# ============================================================
+# I2C BUS
+# ============================================================
+i2c:
+  sda: GPIO5    # XIAO D4
+  scl: GPIO6    # XIAO D5
+  scan: true
+  frequency: 100kHz
+  id: i2c_bus
+
+sensor:
+  # ==========================================================
+  # SCD40 — CO2, Temperature, Humidity (Sensirion)
+  # ==========================================================
+  - platform: scd4x
+    id: scd40_sensor
+    i2c_id: i2c_bus
+    address: 0x62
+    update_interval: ${update_interval}
+    automatic_self_calibration: true
+
+    co2:
+      name: "${node_friendly} CO2"
+      id: co2_level
+      unit_of_measurement: "ppm"
+      accuracy_decimals: 0
+      on_value:
+        then:
+          - if:
+              condition:
+                sensor.in_range:
+                  id: co2_level
+                  above: ${co2_critical}
+              then:
+                - mqtt.publish:
+                    topic: "homelab/air_quality/${location}/alerts/co2"
+                    payload: "critical"
+              else:
+                - if:
+                    condition:
+                      sensor.in_range:
+                        id: co2_level
+                        above: ${co2_warning}
+                    then:
+                      - mqtt.publish:
+                          topic: "homelab/air_quality/${location}/alerts/co2"
+                          payload: "warning"
+                    else:
+                      - mqtt.publish:
+                          topic: "homelab/air_quality/${location}/alerts/co2"
+                          payload: "normal"
+
+    temperature:
+      name: "${node_friendly} Temperature (SCD40)"
+      id: temp_scd40
+      filters:
+        - offset: -2.0   # Compensate for sensor self-heating
+
+    humidity:
+      name: "${node_friendly} Humidity (SCD40)"
+      id: humidity_scd40
+
+  # ==========================================================
+  # SEN55 — PM1/PM2.5/PM4/PM10, VOC, NOx, Temp, Humidity
+  # ==========================================================
+  - platform: sen5x
+    id: sen55_sensor
+    i2c_id: i2c_bus
+    address: 0x69
+    update_interval: ${update_interval}
+
+    pm_1_0:
+      name: "${node_friendly} PM1.0"
+      unit_of_measurement: "µg/m³"
+      accuracy_decimals: 1
+
+    pm_2_5:
+      name: "${node_friendly} PM2.5"
+      id: pm25_level
+      unit_of_measurement: "µg/m³"
+      accuracy_decimals: 1
+      on_value:
+        then:
+          - if:
+              condition:
+                sensor.in_range:
+                  id: pm25_level
+                  above: ${pm25_warning}
+              then:
+                - mqtt.publish:
+                    topic: "homelab/air_quality/${location}/alerts/pm25"
+                    payload: "warning"
+              else:
+                - mqtt.publish:
+                    topic: "homelab/air_quality/${location}/alerts/pm25"
+                    payload: "normal"
+
+    pm_4_0:
+      name: "${node_friendly} PM4.0"
+      unit_of_measurement: "µg/m³"
+      accuracy_decimals: 1
+
+    pm_10_0:
+      name: "${node_friendly} PM10"
+      unit_of_measurement: "µg/m³"
+      accuracy_decimals: 1
+
+    voc_index:
+      name: "${node_friendly} VOC Index (SEN55)"
+      unit_of_measurement: "index"
+
+    nox_index:
+      name: "${node_friendly} NOx Index"
+      unit_of_measurement: "index"
+
+    temperature:
+      name: "${node_friendly} Temperature (SEN55)"
+      filters:
+        - offset: -2.0
+
+    humidity:
+      name: "${node_friendly} Humidity (SEN55)"
+
+  # ==========================================================
+  # ENS160 — AQI, eCO2, TVOC (ScioSense)
+  # ==========================================================
+  - platform: ens160_i2c
+    i2c_id: i2c_bus
+    address: 0x53
+    update_interval: ${update_interval}
+    compensation:
+      temperature_source: temp_scd40    # Feed SCD40 temp for accuracy
+      humidity_source: humidity_scd40
+
+    eco2:
+      name: "${node_friendly} eCO2 (ENS160)"
+      unit_of_measurement: "ppm"
+      accuracy_decimals: 0
+
+    tvoc:
+      name: "${node_friendly} TVOC"
+      unit_of_measurement: "ppb"
+      accuracy_decimals: 0
+
+    aqi:
+      name: "${node_friendly} AQI"
+      id: aqi_level
+
+  # ==========================================================
+  # BMP280 — Barometric Pressure (backup temp/humidity)
+  # ==========================================================
+  - platform: bmp280_i2c
+    i2c_id: i2c_bus
+    address: 0x76
+    update_interval: ${update_interval}
+
+    temperature:
+      name: "${node_friendly} Temperature (BMP280)"
+      filters:
+        - offset: -2.0
+
+    pressure:
+      name: "${node_friendly} Barometric Pressure"
+      unit_of_measurement: "hPa"
+
+  # WiFi / system
+  - platform: wifi_signal
+    name: "${node_friendly} WiFi Signal"
+    update_interval: 60s
+
+  - platform: uptime
+    name: "${node_friendly} Uptime"
+    update_interval: 60s
+
+# ============================================================
+# AQI Status Text
+# ============================================================
+text_sensor:
+  - platform: template
+    name: "${node_friendly} Air Quality Status"
+    update_interval: 60s
+    lambda: |-
+      int aqi = (int) id(aqi_level).state;
+      int co2 = (int) id(co2_level).state;
+      float pm = id(pm25_level).state;
+      if (aqi >= 4 || co2 > 2000 || pm > 35) return {"Poor"};
+      if (aqi == 3 || co2 > 1000 || pm > 15) return {"Moderate"};
+      return {"Good"};
+
+  - platform: wifi_info
+    ip_address:
+      name: "${node_friendly} IP"
+
+button:
+  - platform: restart
+    name: "${node_friendly} Restart"
+
+# ============================================================
+# Status LED
+# ============================================================
+light:
+  - platform: esp32_rmt_led_strip
+    id: status_led
+    name: "${node_friendly} LED"
+    pin: GPIO21
+    num_leds: 1
+    rmt_symbols: 64
+    chipset: WS2812
+    rgb_order: GRB
+    default_transition_length: 500ms
+    effects:
+      - automation:
+          name: "AQI Status"
+          sequence:
+            - light.turn_on:
+                id: status_led
+                red: !lambda "return id(co2_level).state > 2000 ? 1.0 : 0.0;"
+                green: !lambda "return id(co2_level).state < 800 ? 1.0 : 0.0;"
+                blue: 0%
