@@ -1,10 +1,26 @@
 # ============================================================
-# Seeed Studio 24GHz mmWave Human Static Presence Sensor
-# SKU: 101010001 (from invoice)
+#  Seeed 24GHz mmWave Human Static Presence Sensor
+#  SKU: 101010001 (the sensor from your Seeed invoice)
 # ============================================================
-# This is the standalone Seeed mmWave sensor (not the LD2410C).
-# It communicates over UART using Seeed's MR24HPC1 protocol.
-# Can be used standalone or alongside S3 Sense.
+#  Flash command (Windows): tools\windows\flash-windows.bat seeed-mmwave-kitchen
+#  Flash command (Linux):   ./tools/linux/flash.sh seeed-mmwave-kitchen
+#
+#  ABOUT THIS SENSOR:
+#  The Seeed MR24HPC1 is the 24GHz radar from your invoice.
+#  It's different from the LD2410C — it uses Seeed's own protocol
+#  but ESPHome has full native support for it.
+#
+#  EXTRA FEATURES vs LD2410C:
+#  - Scene modes: Standard, Area detection, Bathroom
+#  - Configurable sensitivity (1-3 levels)
+#  - Configurable disappear timeout (10s to 60min)
+#  - Experimental respiratory detection
+#
+#  WIRING (same as LD2410C):
+#    MR24HPC1 VCC → XIAO 3.3V
+#    MR24HPC1 GND → XIAO GND
+#    MR24HPC1 TX  → XIAO D7 (GPIO44)
+#    MR24HPC1 RX  → XIAO D6 (GPIO43)
 # ============================================================
 
 substitutions:
@@ -15,7 +31,7 @@ substitutions:
 esphome:
   name: ${node_name}
   friendly_name: ${node_friendly}
-  comment: "Seeed 24GHz mmWave Static Presence Sensor"
+  comment: "Seeed 24GHz MR24HPC1 static presence sensor"
 
 esp32:
   board: seeed_xiao_esp32s3
@@ -42,15 +58,26 @@ wifi:
     password: !secret wifi_fallback_password
 
 captive_portal:
+web_server:
+  port: 80
 
 mqtt:
   broker: !secret mqtt_broker
   username: !secret mqtt_username
   password: !secret mqtt_password
   topic_prefix: "homelab/presence/${room_name}"
+  birth_message:
+    topic: "homelab/presence/${room_name}/status"
+    payload: "online"
+    retain: true
+  will_message:
+    topic: "homelab/presence/${room_name}/status"
+    payload: "offline"
+    retain: true
+  log_topic: null
 
 # ============================================================
-# UART for Seeed MR24HPC1 24GHz mmWave sensor
+# UART for Seeed MR24HPC1
 # ============================================================
 uart:
   id: uart_bus
@@ -59,29 +86,37 @@ uart:
   baud_rate: 115200
 
 # ============================================================
-# Seeed MR24HPC1 component
+# SEEED MR24HPC1 COMPONENT
 # ============================================================
 seeed_mr24hpc1:
   id: mr24hpc1
   uart_id: uart_bus
 
 binary_sensor:
-  # Human presence detected (static or moving)
   - platform: seeed_mr24hpc1
     seeed_mr24hpc1_id: mr24hpc1
     has_target:
       name: "${node_friendly} Presence"
-      id: room_occupied
       device_class: occupancy
+      on_press:
+        then:
+          - mqtt.publish:
+              topic: "homelab/presence/${room_name}/occupied"
+              payload: "true"
+              retain: true
+      on_release:
+        then:
+          - mqtt.publish:
+              topic: "homelab/presence/${room_name}/occupied"
+              payload: "false"
+              retain: true
 
-  # Moving target detected
   - platform: seeed_mr24hpc1
     seeed_mr24hpc1_id: mr24hpc1
     has_moving_target:
       name: "${node_friendly} Motion"
       device_class: motion
 
-  # Static (still) target detected
   - platform: seeed_mr24hpc1
     seeed_mr24hpc1_id: mr24hpc1
     has_still_target:
@@ -101,12 +136,6 @@ sensor:
     custom_spatial_static_distance:
       name: "${node_friendly} Static Distance"
       unit_of_measurement: "cm"
-    custom_boundary:
-      name: "${node_friendly} Detection Boundary"
-    custom_clutter_energy:
-      name: "${node_friendly} Clutter Energy"
-    custom_max_distance_boundary:
-      name: "${node_friendly} Max Boundary"
 
   - platform: wifi_signal
     name: "${node_friendly} WiFi Signal"
@@ -125,16 +154,6 @@ number:
     static_detection_boundary:
       name: "${node_friendly} Static Boundary"
 
-text_sensor:
-  - platform: seeed_mr24hpc1
-    seeed_mr24hpc1_id: mr24hpc1
-    heart_rate_abnormality_info:
-      name: "${node_friendly} Heart Rate Info"
-
-button:
-  - platform: restart
-    name: "${node_friendly} Restart"
-
 select:
   - platform: seeed_mr24hpc1
     seeed_mr24hpc1_id: mr24hpc1
@@ -143,7 +162,7 @@ select:
       # Options: standard, area detection, toilet
     sensitivity:
       name: "${node_friendly} Sensitivity"
-      # Options: 1 (low) through 3 (high)
+      # Options: 1=low, 2=medium, 3=high
     time_for_disappear:
       name: "${node_friendly} Timeout"
       # Options: 10s, 30s, 1min, 2min, 5min, 10min, 30min, 60min
@@ -153,3 +172,23 @@ switch:
     seeed_mr24hpc1_id: mr24hpc1
     output_info_switch:
       name: "${node_friendly} Debug Output"
+
+button:
+  - platform: restart
+    name: "${node_friendly} Restart"
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "${node_friendly} IP Address"
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: status_led
+    name: "${node_friendly} LED"
+    pin: GPIO21
+    num_leds: 1
+    rmt_symbols: 64
+    chipset: WS2812
+    rgb_order: GRB
+    default_transition_length: 0s
