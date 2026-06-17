@@ -1,0 +1,103 @@
+name: Validate ESPHome Configs
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - '**/*.yaml'
+      - '**/*.yml'
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate-esphome:
+    name: Validate ESPHome YAML Configs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install ESPHome
+        run: pip install esphome
+
+      - name: Create dummy secrets.yaml for CI
+        run: |
+          cat > secrets.yaml << 'EOF'
+          wifi_ssid: "ci_test_ssid"
+          wifi_password: "ci_test_password"
+          wifi_fallback_password: "ci_fallback"
+          ha_api_key: "dGVzdGtleWZvcmNpdGVzdGluZ29ubHkxMjM0NTY3"
+          ha_ota_password: "ci_ota_password"
+          mqtt_broker: "192.168.50.127"
+          mqtt_username: "ci_user"
+          mqtt_password: "ci_password"
+          influxdb_host: "192.168.10.83"
+          influxdb_port: "8086"
+          influxdb_db: "esp32_sensors"
+          influxdb_username: "esp32"
+          influxdb_password: "ci_password"
+          EOF
+
+      - name: Validate presence sensor nodes
+        run: |
+          for config in presence-sensor/esphome/presence-*.yaml; do
+            echo "Validating $config..."
+            esphome config "$config"
+          done
+
+      - name: Validate air quality monitor
+        run: |
+          esphome config air-quality-monitor/esphome/air-quality-node.yaml
+
+      - name: Validate thermal presence sensor
+        run: |
+          esphome config thermal-presence/esphome/thermal-sensor.yaml
+
+      - name: Validate ESP32-C6 gateway
+        run: |
+          esphome config esp32-c6-gateway/esphome/c6-env-monitor.yaml
+
+      - name: Validate n8n workflow JSON
+        run: |
+          for workflow in n8n-workflows/*.json; do
+            echo "Validating JSON: $workflow"
+            python3 -c "import json; json.load(open('$workflow')); print('✓ Valid JSON')"
+          done
+
+      - name: Lint YAML files
+        run: |
+          pip install yamllint
+          yamllint -d relaxed presence-sensor/ha-automations/ || true
+          yamllint -d relaxed ansible/ || true
+
+  security-scan:
+    name: Security — Check for Hardcoded Secrets
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for hardcoded IPs in non-example files
+        run: |
+          echo "Checking for potential hardcoded credentials..."
+          # Warn if actual passwords appear (not placeholder text)
+          if grep -r "password:" --include="*.yaml" . | grep -v "!secret" | grep -v "ci_" | grep -v "#" | grep -v "YOUR_" | grep -v "secrets.yaml"; then
+            echo "WARNING: Found potential hardcoded passwords"
+            exit 1
+          fi
+          echo "✓ No hardcoded passwords found"
+
+      - name: Ensure secrets.yaml is gitignored
+        run: |
+          if grep -q "^secrets.yaml" .gitignore; then
+            echo "✓ secrets.yaml is properly gitignored"
+          else
+            echo "ERROR: secrets.yaml must be in .gitignore"
+            exit 1
+          fi
