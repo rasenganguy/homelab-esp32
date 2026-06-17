@@ -1,19 +1,37 @@
 # ============================================================
-# Office Presence Node — Instance Config
+#  Office Presence Node
 # ============================================================
-# Flash command: esphome run presence-office.yaml
+#  HOW TO USE THIS FILE:
+#  Flash command (Windows): tools\windows\flash-windows.bat presence-office
+#  Flash command (Linux):   ./tools/linux/flash.sh presence-office
+#
+#  TO ADD A NEW ROOM:
+#  1. Copy this file: cp presence-office.yaml presence-diningroom.yaml
+#  2. Change the substitutions below (node_name, node_friendly, room_name)
+#  3. Flash it: flash-windows.bat presence-diningroom
+#  That's it — HA will auto-discover the new device.
 # ============================================================
 
 substitutions:
+  # The internal ID — no spaces, lowercase, hyphens only
   node_name: "presence-office"
+  # The human-readable name shown in Home Assistant
   node_friendly: "Office Presence"
+  # Room name for MQTT topics (no spaces)
   room_name: "office"
-  ld2410_max_distance: "4m"     # Office is smaller, 4m is sufficient
+  # Max detection range (2m, 4m, or 6m)
+  ld2410_max_distance: "4m"
+  # Sensitivity for still target (lower = more sensitive, default 20)
   ld2410_still_threshold: "20"
+  # Sensitivity for moving target
   ld2410_move_threshold: "20"
+  # How long PIR stays "on" after motion stops
   pir_delay_off: "15s"
+  # How often to report distance values to HA
   update_interval: "5s"
+  # Log verbosity: DEBUG (verbose) or INFO (normal)
   log_level: "INFO"
 
+# Load the shared base configuration
 packages:
   base: !include presence-node.yaml
